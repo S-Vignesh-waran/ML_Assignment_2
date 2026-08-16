@@ -1,40 +1,44 @@
 """
 Dataset download helper for Breast Cancer Wisconsin dataset from Kaggle.
 
-Before running:
-1. Download kaggle.json from Kaggle account.
-2. Place kaggle.json in the project root directory.
-3. Run this script from the project root.
+Recommended setup:
+1. Go to Kaggle -> Account -> Create New API Token.
+2. Place the downloaded kaggle.json at ~/.kaggle/kaggle.json.
+3. Run: chmod 600 ~/.kaggle/kaggle.json
+4. Run: python download_kaggle_dataset.py
 """
 
-import os
-import zipfile
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+DATASET_SLUG = "uciml/breast-cancer-wisconsin-data"
+ROOT_DIR = Path(__file__).resolve().parent
+DATA_DIR = ROOT_DIR / "data"
 
 
-KAGGLE_DATASET = "uciml/breast-cancer-wisconsin-data"
-ZIP_FILE = "breast-cancer-wisconsin-data.zip"
-DATA_DIR = "data"
-
-
-def prepare_kaggle_config():
-    os.system("mkdir -p ~/.kaggle")
-    os.system("cp kaggle.json ~/.kaggle/")
-    os.system("chmod 600 ~/.kaggle/kaggle.json")
-
-
-def download_dataset():
-    os.makedirs(DATA_DIR, exist_ok=True)
-    os.system(f"kaggle datasets download -d {KAGGLE_DATASET}")
-
-
-def extract_dataset():
-    with zipfile.ZipFile(ZIP_FILE, "r") as zip_ref:
-        zip_ref.extractall(DATA_DIR)
-
-    print(f"Dataset extracted to {DATA_DIR}")
+def main() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    command = [
+        sys.executable,
+        "-m",
+        "kaggle",
+        "datasets",
+        "download",
+        "-d",
+        DATASET_SLUG,
+        "-p",
+        str(DATA_DIR),
+        "--unzip",
+    ]
+    print(f"Downloading Kaggle dataset: {DATASET_SLUG}")
+    print("Destination:", DATA_DIR)
+    subprocess.run(command, check=True)
+    print("Download complete. Expected file:", DATA_DIR / "data.csv")
 
 
 if __name__ == "__main__":
-    prepare_kaggle_config()
-    download_dataset()
-    extract_dataset()
+    main()
+

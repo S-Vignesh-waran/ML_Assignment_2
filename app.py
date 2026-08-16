@@ -1,220 +1,351 @@
+"""Streamlit application for classification models."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Optional, cast
+
 import joblib
-import pandas as pd
-import streamlit as st
-import seaborn as sns
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import streamlit as st
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    matthews_corrcoef,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 
-from sklearn.metrics import accuracy_score
-from sklearn.metrics import precision_score
-from sklearn.metrics import recall_score
-from sklearn.metrics import f1_score
-from sklearn.metrics import matthews_corrcoef
-from sklearn.metrics import roc_auc_score
-from sklearn.metrics import confusion_matrix
-from sklearn.metrics import classification_report
-
-
-TARGET_COLUMN = "diagnosis"
-
-
-MODEL_PATHS = {
-    "Logistic Regression": "model/logistic_regression.pkl",
-    "Decision Tree": "model/decision_tree.pkl",
-    "kNN": "model/knn.pkl",
-    "Naive Bayes": "model/naive_bayes.pkl",
-    "Random Forest (Ensemble)": "model/random_forest.pkl"
-}
-
-
-SCALED_MODELS = [
-    "Logistic Regression",
-    "kNN"
-]
-
+ROOT_DIR = Path(__file__).resolve().parent
+MODEL_DIR = ROOT_DIR / "model"
+DEFAULT_TEST_DATA = ROOT_DIR / "test_data.csv"
 
 st.set_page_config(
-    page_title="Breast Cancer Classification Dashboard",
-    page_icon="🧬",
-    layout="wide"
+    page_title="ML Assignment 2 - Classification Models",
+    page_icon="📊",
+    layout="wide",
 )
 
 
 @st.cache_resource
-def load_model(model_name):
-    return joblib.load(MODEL_PATHS[model_name])
+def load_artifacts() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Load metadata, saved metrics, and trained models."""
+    metadata_path = MODEL_DIR / "metadata.json"
+    metrics_path = MODEL_DIR / "metrics.json"
 
+    if not metadata_path.exists() or not metrics_path.exists():
+        try:
+            with st.spinner("Model artifacts are missing. Training models once from data/data.csv..."):
+                from model.train_models import train_and_save
 
-@st.cache_resource
-def load_scaler():
-    return joblib.load("model/scaler.pkl")
+                train_and_save()
+        except Exception as exc:
+            st.error(
+                "Model artifacts are missing and automatic training failed. "
+                "Run `python download_kaggle_dataset.py` and `python model/train_models.py` first."
+            )
+            st.exception(exc)
+            st.stop()
 
-
-@st.cache_data
-def load_saved_metrics():
-    return pd.read_csv("outputs/comparison_metrics.csv")
-
-
-def calculate_auc(model, X_eval, y_eval):
-    try:
-        probabilities = model.predict_proba(X_eval)
-
-        return roc_auc_score(
-            y_eval,
-            probabilities[:, 1]
-        )
-
-    except Exception:
-        return None
-
-
-def calculate_metrics(model, X_eval, y_eval):
-    predictions = model.predict(X_eval)
-    auc = calculate_auc(model, X_eval, y_eval)
-
-    metrics = {
-        "Accuracy": accuracy_score(y_eval, predictions),
-        "AUC": auc,
-        "Precision": precision_score(
-            y_eval,
-            predictions,
-            zero_division=0
-        ),
-        "Recall": recall_score(
-            y_eval,
-            predictions,
-            zero_division=0
-        ),
-        "F1": f1_score(
-            y_eval,
-            predictions,
-            zero_division=0
-        ),
-        "MCC": matthews_corrcoef(y_eval, predictions)
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    saved_metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    models = {
+        model_key: joblib.load(MODEL_DIR / f"{model_key}.joblib")
+        for model_key in metadata["model_names"]
+        if (MODEL_DIR / f"{model_key}.joblib").exists()
     }
 
-    return metrics, predictions
+    if not models:
+        st.error("No trained model files were found in the model directory.")
+        st.stop()
+
+    return metadata, saved_metrics, models
 
 
-st.title("Breast Cancer Classification Dashboard")
-st.caption("Machine Learning Assignment 2")
+def read_csv_dataframe(source: Any) -> pd.DataFrame:
+    """Read CSV input and return a dataframe."""
+    # noinspection PyArgumentList
+    return cast(pd.DataFrame, pd.read_csv(source, iterator=False))
 
-st.markdown(
-    """
-    This Streamlit application evaluates multiple classification models using the
-    Breast Cancer Wisconsin Diagnostic Dataset.
 
-    Upload the provided `test_data.csv`, select a model, and view the model's
-    evaluation metrics, confusion matrix, and classification report.
-    """
-)
+def normalize_target(y_raw: pd.Series, metadata: dict[str, Any]) -> pd.Series:
+    """Convert string or numeric target values to encoded numeric labels."""
+    label_to_index = metadata["label_to_index"]
 
-with st.sidebar:
-    st.header("Input Controls")
+    if pd.api.types.is_numeric_dtype(y_raw):
+        return y_raw.astype(int)
 
-    selected_model_name = st.selectbox(
-        "Select Classification Model",
-        list(MODEL_PATHS.keys())
+    normalized_mapping = {label.lower(): index for label, index in label_to_index.items()}
+    normalized_mapping.update({str(index): index for index in label_to_index.values()})
+    normalized_mapping.update({label[0].lower(): index for label, index in label_to_index.items()})
+
+    cleaned_target = y_raw.astype(str).str.strip().str.lower()
+    mapped_target = cleaned_target.map(normalized_mapping)
+
+    if mapped_target.isna().any():
+        invalid_values = sorted(str(value) for value in y_raw[mapped_target.isna()].astype(str).unique())
+        expected_values = ", ".join(label_to_index.keys())
+        raise ValueError(
+            f"Invalid target labels found: {', '.join(invalid_values)}. "
+            f"Expected labels: {expected_values}."
+        )
+
+    return mapped_target.astype(int)
+
+
+def get_score_values(model: Any, X: pd.DataFrame) -> Optional[np.ndarray]:
+    """Return scores suitable for binary ROC AUC calculation."""
+    if hasattr(model, "predict_proba"):
+        probabilities = model.predict_proba(X)
+        if probabilities.ndim == 2 and probabilities.shape[1] > 1:
+            return probabilities[:, 1]
+
+    if hasattr(model, "decision_function"):
+        decision_scores = model.decision_function(X)
+        if np.ndim(decision_scores) == 1:
+            return decision_scores
+
+    return None
+
+
+def evaluate_predictions(model: Any, X: pd.DataFrame, y_true: pd.Series) -> dict[str, Any]:
+    """Calculate assignment metrics for one model."""
+    y_pred = model.predict(X)
+    y_scores = get_score_values(model, X)
+    auc = float(roc_auc_score(y_true, y_scores)) if y_scores is not None and y_true.nunique() == 2 else None
+
+    return {
+        "accuracy": float(accuracy_score(y_true, y_pred)),
+        "auc": auc,
+        "precision": float(precision_score(y_true, y_pred, average="weighted", zero_division=0)),
+        "recall": float(recall_score(y_true, y_pred, average="weighted", zero_division=0)),
+        "f1": float(f1_score(y_true, y_pred, average="weighted", zero_division=0)),
+        "mcc": float(matthews_corrcoef(y_true, y_pred)),
+        "predictions": y_pred,
+    }
+
+
+def format_metric(value: Optional[float]) -> str:
+    """Format metric values for display."""
+    return "N/A" if value is None or pd.isna(value) else f"{value:.4f}"
+
+
+def metrics_dataframe(metrics_by_model: dict[str, dict[str, Any]], model_names: dict[str, str]) -> pd.DataFrame:
+    """Build a metrics comparison dataframe."""
+    return pd.DataFrame(
+        [
+            {
+                "ML Model Name": model_names.get(model_key, model_key),
+                "Accuracy": metrics["accuracy"],
+                "AUC": metrics["auc"],
+                "Precision": metrics["precision"],
+                "Recall": metrics["recall"],
+                "F1": metrics["f1"],
+                "MCC": metrics["mcc"],
+            }
+            for model_key, metrics in metrics_by_model.items()
+        ]
     )
 
-    uploaded_file = st.file_uploader(
-        "Upload test_data.csv",
-        type=["csv"]
+
+def plot_confusion_matrix(y_true: pd.Series, y_pred: np.ndarray, target_names: list[str]) -> plt.Figure:
+    """Create a confusion matrix heatmap."""
+    fig, ax = plt.subplots(figsize=(5.5, 4.5))
+    sns.heatmap(
+        confusion_matrix(y_true, y_pred),
+        annot=True,
+        fmt="d",
+        cmap="Blues",
+        xticklabels=target_names,
+        yticklabels=target_names,
+        ax=ax,
+    )
+    ax.set_title("Confusion Matrix")
+    ax.set_xlabel("Predicted Label")
+    ax.set_ylabel("Actual Label")
+    fig.tight_layout()
+    return fig
+
+
+def validate_input_data(data: pd.DataFrame, feature_names: list[str]) -> list[str]:
+    """Return missing feature columns."""
+    return [feature for feature in feature_names if feature not in data.columns]
+
+
+def load_input_data(uploaded_file: Any) -> tuple[pd.DataFrame, str]:
+    """Load uploaded CSV or bundled test data."""
+    if uploaded_file is not None:
+        return read_csv_dataframe(uploaded_file), "Uploaded CSV"
+    return read_csv_dataframe(DEFAULT_TEST_DATA), "Bundled test_data.csv"
+
+
+def display_dataset_preview(data: pd.DataFrame, data_source: str) -> None:
+    """Display dataset preview."""
+    st.subheader("Dataset Preview")
+    st.write(f"**Source:** {data_source}")
+    st.write(f"Rows: **{data.shape[0]}**, Columns: **{data.shape[1]}**")
+    st.dataframe(data.head(20), use_container_width=True)
+
+
+def display_metric_cards(metrics: dict[str, Any]) -> None:
+    """Display the required evaluation metrics."""
+    metric_columns = st.columns(6)
+    metric_columns[0].metric("Accuracy", format_metric(metrics["accuracy"]))
+    metric_columns[1].metric("AUC", format_metric(metrics["auc"]))
+    metric_columns[2].metric("Precision", format_metric(metrics["precision"]))
+    metric_columns[3].metric("Recall", format_metric(metrics["recall"]))
+    metric_columns[4].metric("F1 Score", format_metric(metrics["f1"]))
+    metric_columns[5].metric("MCC", format_metric(metrics["mcc"]))
+
+
+def display_model_comparison(current_metrics: dict[str, dict[str, Any]], model_names: dict[str, str]) -> None:
+    """Display model comparison table."""
+    st.subheader("Model Comparison on Current Test Data")
+    comparison_df = metrics_dataframe(current_metrics, model_names)
+    st.dataframe(
+        comparison_df.style.format(
+            {
+                "Accuracy": "{:.4f}",
+                "AUC": lambda value: "N/A" if pd.isna(value) else f"{value:.4f}",
+                "Precision": "{:.4f}",
+                "Recall": "{:.4f}",
+                "F1": "{:.4f}",
+                "MCC": "{:.4f}",
+            }
+        ),
+        use_container_width=True,
     )
 
 
-st.subheader("Saved Model Comparison Table")
+def display_classification_outputs(y_true: pd.Series, y_pred: np.ndarray, target_names: list[str]) -> None:
+    """Display confusion matrix and classification report."""
+    matrix_column, report_column = st.columns([1, 1.2])
 
-try:
-    saved_metrics = load_saved_metrics()
-    st.dataframe(saved_metrics, use_container_width=True)
-except Exception as error:
-    st.warning("Unable to load saved comparison metrics.")
-    st.write(error)
+    with matrix_column:
+        st.pyplot(plot_confusion_matrix(y_true, y_pred, target_names))
 
-
-if uploaded_file is not None:
-    data = pd.read_csv(uploaded_file)
-
-    st.subheader("Uploaded Test Dataset Preview")
-    st.dataframe(data.head(), use_container_width=True)
-
-    if TARGET_COLUMN not in data.columns:
-        st.error(
-            f"The uploaded file must contain the target column '{TARGET_COLUMN}'."
-        )
-    else:
-        X = data.drop(columns=[TARGET_COLUMN])
-        y = data[TARGET_COLUMN]
-
-        model = load_model(selected_model_name)
-
-        if selected_model_name in SCALED_MODELS:
-            scaler = load_scaler()
-            X_eval = scaler.transform(X)
-        else:
-            X_eval = X
-
-        metrics, predictions = calculate_metrics(
-            model,
-            X_eval,
-            y
-        )
-
-        st.subheader(f"Evaluation Metrics: {selected_model_name}")
-
-        col1, col2, col3 = st.columns(3)
-        col4, col5, col6 = st.columns(3)
-
-        col1.metric("Accuracy", f"{metrics['Accuracy']:.4f}")
-
-        if metrics["AUC"] is None:
-            col2.metric("AUC", "NA")
-        else:
-            col2.metric("AUC", f"{metrics['AUC']:.4f}")
-
-        col3.metric("Precision", f"{metrics['Precision']:.4f}")
-        col4.metric("Recall", f"{metrics['Recall']:.4f}")
-        col5.metric("F1 Score", f"{metrics['F1']:.4f}")
-        col6.metric("MCC Score", f"{metrics['MCC']:.4f}")
-
-        st.subheader("Confusion Matrix")
-
-        cm = confusion_matrix(
-            y,
-            predictions,
-            labels=[0, 1]
-        )
-
-        fig, ax = plt.subplots(figsize=(6, 5))
-
-        sns.heatmap(
-            cm,
-            annot=True,
-            fmt="d",
-            cmap="Blues",
-            xticklabels=["Benign", "Malignant"],
-            yticklabels=["Benign", "Malignant"],
-            ax=ax
-        )
-
-        ax.set_xlabel("Predicted Class")
-        ax.set_ylabel("Actual Class")
-        ax.set_title(f"Confusion Matrix - {selected_model_name}")
-
-        st.pyplot(fig)
-
-        st.subheader("Classification Report")
-
+    with report_column:
+        st.markdown("**Classification Report**")
         report = classification_report(
-            y,
-            predictions,
-            target_names=["Benign", "Malignant"],
+            y_true,
+            y_pred,
+            target_names=target_names,
             zero_division=0,
-            output_dict=True
+            output_dict=True,
+        )
+        st.dataframe(pd.DataFrame(report).transpose(), use_container_width=True)
+
+
+def display_predictions(data: pd.DataFrame, predicted_labels: list[str]) -> None:
+    """Display predictions and provide a CSV download."""
+    prediction_output = data.copy()
+    prediction_output["predicted_diagnosis"] = predicted_labels
+
+    st.subheader("Predictions")
+    st.dataframe(prediction_output.head(100), use_container_width=True)
+    st.download_button(
+        "Download predictions as CSV",
+        prediction_output.to_csv(index=False).encode("utf-8"),
+        file_name="predictions.csv",
+        mime="text/csv",
+    )
+
+
+def display_dataset_details(metadata: dict[str, Any], model_names: dict[str, str]) -> None:
+    """Display dataset and model metadata."""
+    with st.expander("Dataset and model details"):
+        st.json(
+            {
+                "dataset": metadata["dataset_name"],
+                "dataset_source": metadata["dataset_source"],
+                "problem_type": metadata["problem_type"],
+                "instances": metadata["instances"],
+                "features": metadata["features"],
+                "target_column": metadata["target_column"],
+                "target_names": metadata["target_names"],
+                "models": model_names,
+            }
         )
 
-        report_df = pd.DataFrame(report).transpose()
-        st.dataframe(report_df, use_container_width=True)
 
-else:
-    st.info("Please upload test_data.csv to evaluate the selected model.")
+def main() -> None:
+    metadata, saved_metrics, models = load_artifacts()
+    feature_names = metadata["feature_names"]
+    target_column = metadata["target_column"]
+    target_names = metadata["target_names"]
+    model_names = metadata["model_names"]
+
+    st.title("📊 ML Assignment 2: Classification Model Demo")
+    st.markdown(
+        "Interactive Streamlit app for comparing classification models trained on the "
+        "**Kaggle Breast Cancer Wisconsin Diagnostic Dataset**."
+    )
+
+    with st.sidebar:
+        st.header("Dataset Input")
+        uploaded_file = st.file_uploader(
+            "Upload test CSV",
+            type=["csv"],
+            help="Upload the provided test_data.csv or another CSV with the same feature columns.",
+        )
+        st.caption("If no file is uploaded, the bundled `test_data.csv` is used.")
+        selected_model_key = st.selectbox(
+            "Select model",
+            list(models.keys()),
+            format_func=lambda key: model_names.get(key, key),
+        )
+
+    data, data_source = load_input_data(uploaded_file)
+    display_dataset_preview(data, data_source)
+
+    missing_features = validate_input_data(data, feature_names)
+    if missing_features:
+        st.error("The CSV is missing required feature columns: " + ", ".join(missing_features))
+        st.stop()
+
+    X = data[feature_names].copy()
+    selected_model = models[selected_model_key]
+    selected_display_name = model_names[selected_model_key]
+    predictions = selected_model.predict(X)
+    predicted_labels = [metadata["index_to_label"][str(int(prediction))] for prediction in predictions]
+
+    st.subheader(f"Selected Model: {selected_display_name}")
+
+    if target_column in data.columns:
+        try:
+            y_true = normalize_target(data[target_column], metadata)
+        except ValueError as exc:
+            st.error(str(exc))
+            st.stop()
+
+        current_metrics = {
+            model_key: evaluate_predictions(model, X, y_true)
+            for model_key, model in models.items()
+        }
+        selected_metrics = current_metrics[selected_model_key]
+
+        display_metric_cards(selected_metrics)
+        display_model_comparison(current_metrics, model_names)
+        display_classification_outputs(y_true, selected_metrics["predictions"], target_names)
+    else:
+        st.warning(
+            f"Column `{target_column}` was not found, so evaluation metrics cannot be calculated. "
+            "Predictions are still shown below."
+        )
+        st.subheader("Training-Time Metrics from Saved Test Split")
+        st.dataframe(metrics_dataframe(saved_metrics, model_names), use_container_width=True)
+
+    display_predictions(data, predicted_labels)
+    display_dataset_details(metadata, model_names)
+
+
+if __name__ == "__main__":
+    main()
+

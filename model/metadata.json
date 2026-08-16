@@ -1,0 +1,63 @@
+{
+  "dataset_name": "Breast Cancer Wisconsin Diagnostic Dataset",
+  "dataset_source": "Kaggle: https://www.kaggle.com/datasets/uciml/breast-cancer-wisconsin-data",
+  "kaggle_dataset_slug": "uciml/breast-cancer-wisconsin-data",
+  "problem_type": "Binary classification",
+  "instances": 569,
+  "features": 30,
+  "feature_names": [
+    "radius_mean",
+    "texture_mean",
+    "perimeter_mean",
+    "area_mean",
+    "smoothness_mean",
+    "compactness_mean",
+    "concavity_mean",
+    "concave points_mean",
+    "symmetry_mean",
+    "fractal_dimension_mean",
+    "radius_se",
+    "texture_se",
+    "perimeter_se",
+    "area_se",
+    "smoothness_se",
+    "compactness_se",
+    "concavity_se",
+    "concave points_se",
+    "symmetry_se",
+    "fractal_dimension_se",
+    "radius_worst",
+    "texture_worst",
+    "perimeter_worst",
+    "area_worst",
+    "smoothness_worst",
+    "compactness_worst",
+    "concavity_worst",
+    "concave points_worst",
+    "symmetry_worst",
+    "fractal_dimension_worst"
+  ],
+  "target_column": "diagnosis",
+  "target_names": [
+    "malignant",
+    "benign"
+  ],
+  "label_to_index": {
+    "malignant": 0,
+    "benign": 1
+  },
+  "index_to_label": {
+    "0": "malignant",
+    "1": "benign"
+  },
+  "random_state": 42,
+  "test_size": 0.2,
+  "model_names": {
+    "logistic_regression": "Logistic Regression",
+    "decision_tree": "Decision Tree",
+    "knn": "kNN",
+    "naive_bayes": "Naive Bayes",
+    "random_forest": "Random Forest (Ensemble)"
+  },
+  "note": "Five classification models are included as listed in the assignment comparison table."
+}
