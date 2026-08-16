@@ -13,6 +13,15 @@ GitHub Repository Link:
 
 https://github.com/S-Vignesh-waran/ML_Assignment_2.git
 
+## Dataset Download
+
+The Breast Cancer Wisconsin dataset is downloaded from Kaggle.
+
+Kaggle dataset identifier:
+
+```text
+uciml/breast-cancer-wisconsin-data
+
 ##  Models Used
 
 The following classification models were implemented on the same dataset:
@@ -37,7 +46,7 @@ project-folder/
 │-- requirements.txt
 │-- README.md
 │-- test_data.csv
-│-- models/
+│-- model/
 │   │-- train_models.py
 │   │-- logistic_regression
 │   │-- decision_tree
@@ -46,7 +55,7 @@ project-folder/
 │   │-- random_forest
 ```
 
-## E. Model Comparison Table
+##  Model Comparison Table
 
 | ML Model Name | Accuracy | AUC | Precision | Recall | F1 | MCC |
 |---|---:|---:|---:|---:|---:|---:|
@@ -56,7 +65,7 @@ project-folder/
 | Naive Bayes | UPDATE | UPDATE | UPDATE | UPDATE | UPDATE | UPDATE |
 | Random Forest (Ensemble) | UPDATE | UPDATE | UPDATE | UPDATE | UPDATE | UPDATE |
 
-## F. Observations on Model Performance
+##  Observations on Model Performance
 
 | ML Model Name | Observation about model performance |
 |---|---|
